@@ -229,4 +229,6 @@ pub enum ContractError {
     InvalidUpgradeConfig = 34,
     /// Cannot revoke the last remaining Admin role holder (would cause lockout).
     LastAdminRemovalBlocked = 35,
+    /// Attempted to add a guardian that is already registered.
+    DuplicateGuardian = 36,
 }

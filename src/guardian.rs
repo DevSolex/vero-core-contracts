@@ -12,17 +12,24 @@ pub fn add_guardian(env: &Env, admin: Address, guardian: Address) -> Result<(), 
     validation::validate_guardian_config(env, &admin, &guardian)?;
 
     let key = DataKey::Guardian(guardian.clone());
-    if !env.storage().instance().has(&key) {
-        let mut all_guardians: Vec<Address> = env
-            .storage()
-            .instance()
-            .get(&DataKey::AllGuardians)
-            .unwrap_or(Vec::new(env));
-        all_guardians.push_back(guardian.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::AllGuardians, &all_guardians);
+    if env.storage().instance().has(&key) {
+        return Err(ContractError::DuplicateGuardian);
     }
+
+    let mut all_guardians: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::AllGuardians)
+        .unwrap_or(Vec::new(env));
+
+    if all_guardians.contains(guardian.clone()) {
+        return Err(ContractError::DuplicateGuardian);
+    }
+
+    all_guardians.push_back(guardian.clone());
+    env.storage()
+        .instance()
+        .set(&DataKey::AllGuardians, &all_guardians);
 
     env.storage().instance().set(&key, &true);
     env.storage().instance().extend_ttl(LEDGER_TTL, LEDGER_TTL);
@@ -40,6 +47,23 @@ pub fn remove_guardian(env: &Env, admin: Address, guardian: Address) -> Result<(
     }
 
     env.storage().instance().remove(&key);
+
+    let all_guardians: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::AllGuardians)
+        .unwrap_or(Vec::new(env));
+
+    let mut updated = Vec::new(env);
+    for g in all_guardians.iter() {
+        if g != &guardian {
+            updated.push_back(g.clone());
+        }
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::AllGuardians, &updated);
+
     Ok(())
 }
 

@@ -663,3 +663,55 @@ fn test_backward_compatibility_admin_retains_all_powers() {
     assert!(client.get_task(&1).unwrap().is_cancelled);
     assert_eq!(client.get_weight_threshold(), 500);
 }
+
+// ─── Guardian Rotation: Duplicate Prevention & AllGuardians Cleanup ─────
+
+#[test]
+fn test_adding_duplicate_guardian_is_rejected() {
+    let (env, admin, _token, client) = setup();
+    let guardian = Address::generate(&env);
+
+    client.add_guardian(&admin, &guardian);
+    assert!(client.is_guardian(&guardian));
+
+    let result = client.try_add_guardian(&admin, &guardian);
+    assert!(result.is_err(), "duplicate guardian add must be rejected");
+}
+
+#[test]
+fn test_removed_guardian_can_be_re_added() {
+    let (env, admin, _token, client) = setup();
+    let guardian = Address::generate(&env);
+
+    client.add_guardian(&admin, &guardian);
+    assert!(client.is_guardian(&guardian));
+
+    client.remove_guardian(&admin, &guardian);
+    assert!(!client.is_guardian(&guardian));
+
+    let result = client.try_add_guardian(&admin, &guardian);
+    assert!(result.is_ok(), "re-adding a removed guardian must succeed");
+    assert!(client.is_guardian(&guardian));
+}
+
+#[test]
+fn test_guardian_rotation_preserves_other_guardians() {
+    let (env, admin, _token, client) = setup();
+    let g1 = Address::generate(&env);
+    let g2 = Address::generate(&env);
+    let g3 = Address::generate(&env);
+
+    client.add_guardian(&admin, &g1);
+    client.add_guardian(&admin, &g2);
+    client.add_guardian(&admin, &g3);
+
+    client.remove_guardian(&admin, &g2);
+
+    assert!(client.is_guardian(&g1));
+    assert!(!client.is_guardian(&g2));
+    assert!(client.is_guardian(&g3));
+
+    let result = client.try_add_guardian(&admin, &g2);
+    assert!(result.is_ok());
+    assert!(client.is_guardian(&g2));
+}
