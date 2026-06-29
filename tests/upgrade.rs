@@ -2,11 +2,11 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
-    Address, BytesN, Env, Vec,
+    Address, BytesN, Env, TryIntoVal, Vec,
 };
-use vero_core_contracts::{ContractError, VeroContractClient};
+use vero_core_contracts::{ContractError, Role, VeroContractClient};
 
-fn setup() -> (Env, Address, Address, VeroContractClient<'static>) {
+fn setup() -> (Env, Address, Address, Address, VeroContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -20,6 +20,11 @@ fn setup() -> (Env, Address, Address, VeroContractClient<'static>) {
     let token_addr = token.address();
 
     client.initialize(&admin, &token_addr, &100);
+    client.grant_role(&admin, &admin, &Role::GuardianManager);
+    client.grant_role(&admin, &admin, &Role::TaskManager);
+    client.grant_role(&admin, &admin, &Role::ConfigManager);
+    client.grant_role(&admin, &admin, &Role::EmergencyManager);
+    client.grant_role(&admin, &admin, &Role::TreasuryManager);
 
     (env, contract_id, admin, token_addr, client)
 }
@@ -40,11 +45,16 @@ fn generate_signers(env: &Env, n: u32) -> Vec<Address> {
 
 /// Helper to collect all events into a vector of event symbols for assertion.
 fn event_symbols(env: &Env) -> Vec<soroban_sdk::Symbol> {
-    env.events()
-        .all()
-        .iter()
-        .map(|e| e.0.0)
-        .collect::<Vec<_>>()
+    let mut symbols = Vec::new(env);
+    for e in env.events().all().iter() {
+        if let Some(topic) = e.1.get(0) {
+            let res: Result<soroban_sdk::Symbol, _> = topic.try_into_val(env);
+            if let Ok(sym) = res {
+                symbols.push_back(sym);
+            }
+        }
+    }
+    symbols
 }
 
 // ─── Happy path: full multi-sig upgrade flow ────────────────────────
@@ -97,7 +107,10 @@ fn test_full_multi_sig_upgrade_flow() {
     let result = client.try_execute_upgrade();
     // The error should come from the runtime (deployer), not from our contract,
     // meaning our multi-sig checks passed successfully.
-    assert!(result.is_err(), "execute_upgrade should attempt deploy and fail at runtime");
+    assert!(
+        result.is_err(),
+        "execute_upgrade should attempt deploy and fail at runtime"
+    );
 
     // Verify pending state was cleaned up before the deployer call
     // (We can't query pending state directly since there's no view function for it,
@@ -387,7 +400,7 @@ fn test_propose_same_hash_adds_approval() {
     // Signer 2 also proposes with same hash — acts as approval
     let signer2 = signers.get(1).unwrap();
     let result = client.try_propose_upgrade(&signer2, &wasm_hash);
-    assert!(result.is_ok());
+    result.unwrap();
 
     // Signer 3 approves via approve_upgrade
     let signer3 = signers.get(2).unwrap();
@@ -395,7 +408,10 @@ fn test_propose_same_hash_adds_approval() {
 
     // Threshold 3 met — execute should proceed past our checks
     let exec_result = client.try_execute_upgrade();
-    assert!(exec_result.is_err(), "should attempt deploy and fail at runtime");
+    assert!(
+        exec_result.is_err(),
+        "should attempt deploy and fail at runtime"
+    );
 }
 
 // ─── Events emitted correctly ─────────────────────────────────────
@@ -419,11 +435,15 @@ fn test_upgrade_events_emitted() {
     // Should have at least 3 events: up_sig, up_prop, up_app
     assert!(events.len() >= 3, "expected at least 3 upgrade events");
 
-    // Verify event symbols are present
-    let symbols: Vec<_> = events
-        .iter()
-        .map(|e| e.0.0.to_string())
-        .collect();
+    let mut symbols = std::vec::Vec::new();
+    for e in events.iter() {
+        if let Some(topic) = e.1.get(0) {
+            let res: Result<soroban_sdk::Symbol, _> = topic.try_into_val(&env);
+            if let Ok(sym) = res {
+                symbols.push(sym.to_string());
+            }
+        }
+    }
 
     assert!(
         symbols.contains(&"up_sig".to_string()),
@@ -453,10 +473,15 @@ fn test_cancel_upgrade_emits_event() {
     client.cancel_upgrade(&admin);
 
     let events = env.events().all();
-    let symbols: Vec<_> = events
-        .iter()
-        .map(|e| e.0.0.to_string())
-        .collect();
+    let mut symbols = std::vec::Vec::new();
+    for e in events.iter() {
+        if let Some(topic) = e.1.get(0) {
+            let res: Result<soroban_sdk::Symbol, _> = topic.try_into_val(&env);
+            if let Ok(sym) = res {
+                symbols.push(sym.to_string());
+            }
+        }
+    }
 
     assert!(
         symbols.contains(&"up_cncl".to_string()),
@@ -512,15 +537,8 @@ fn test_batch_execute_with_upgrade_operations() {
 
     let calls = soroban_sdk::vec![
         &env,
-        vero_core_contracts::BatchCall::SetUpgradeSigners(
-            admin.clone(),
-            signers.clone(),
-            2u32,
-        ),
-        vero_core_contracts::BatchCall::ProposeUpgrade(
-            signers.get(0).unwrap(),
-            wasm_hash.clone(),
-        ),
+        vero_core_contracts::BatchCall::SetUpgradeSigners(admin.clone(), signers.clone(), 2u32,),
+        vero_core_contracts::BatchCall::ProposeUpgrade(signers.get(0).unwrap(), wasm_hash.clone(),),
         vero_core_contracts::BatchCall::ApproveUpgrade(signers.get(1).unwrap()),
     ];
 
@@ -570,7 +588,10 @@ fn test_single_signer_succeeds_immediately() {
 
     // Single signer means threshold is met immediately on propose
     let exec_result = client.try_execute_upgrade();
-    assert!(exec_result.is_err(), "should attempt deploy and fail at runtime");
+    assert!(
+        exec_result.is_err(),
+        "should attempt deploy and fail at runtime"
+    );
 }
 
 // ─── Legacy upgrade test preserved ─────────────────────────────────
@@ -579,6 +600,7 @@ fn test_single_signer_succeeds_immediately() {
 fn test_upgrade_logic_successful() {
     let (env, admin, _token, client) = setup_without_signers();
 
+    client.grant_role(&admin, &admin, &Role::TaskManager);
     // We register a task to ensure state is present
     client.register_task(&admin, &1u64, &1u32);
     assert!(client.get_task(&1u64).is_some());

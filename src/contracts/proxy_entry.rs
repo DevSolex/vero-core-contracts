@@ -105,6 +105,7 @@ impl VeroContract {
 
     pub fn add_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), ContractError> {
         circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::GuardianManager)?;
         guardian::add_guardian(&env, admin.clone(), guardian.clone())?;
         events::emit_guardian_added(&env, &admin, &guardian);
         Ok(())
@@ -116,6 +117,7 @@ impl VeroContract {
         guardian: Address,
     ) -> Result<(), ContractError> {
         circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::GuardianManager)?;
         guardian::remove_guardian(&env, admin.clone(), guardian.clone())?;
         events::emit_guardian_removed(&env, &admin, &guardian);
         Ok(())
@@ -163,6 +165,7 @@ impl VeroContract {
         recipient: Address,
         amount: i128,
     ) -> Result<(), ContractError> {
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         logic::emergency_recover(&env, admin, recipient, amount)
     }
 
@@ -200,6 +203,29 @@ impl VeroContract {
         events::emit_vault_set(&env, &admin, &vault);
     }
 
+    pub fn set_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), ContractError> {
+        circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)?;
+        if bps > 1000 {
+            return Err(ContractError::InvalidConfig);
+        }
+        env.storage().instance().set(&DataKey::FeeBps, &bps);
+        Ok(())
+    }
+
+    pub fn set_treasury_address(
+        env: Env,
+        admin: Address,
+        treasury: Address,
+    ) -> Result<(), ContractError> {
+        circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::TreasuryAddress, &treasury);
+        Ok(())
+    }
+
     pub fn register_task(
         env: Env,
         admin: Address,
@@ -214,6 +240,7 @@ impl VeroContract {
 
     pub fn cancel_task(env: Env, admin: Address, task_id: u64) -> Result<(), ContractError> {
         circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TaskManager)?;
         task::cancel_task(&env, admin, task_id)
     }
 
@@ -286,10 +313,11 @@ impl VeroContract {
         circuit_breaker::record_failure(&env);
     }
 
-    pub fn reset_circuit_breaker(env: Env, admin: Address) {
-        if circuit_breaker::reset(&env, admin.clone()).is_ok() {
-            events::emit_circuit_breaker_reset(&env, &admin);
-        }
+    pub fn reset_circuit_breaker(env: Env, admin: Address) -> Result<(), ContractError> {
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
+        circuit_breaker::reset(&env, admin.clone())?;
+        events::emit_circuit_breaker_reset(&env, &admin);
+        Ok(())
     }
 
     pub fn get_estimated_cost(_env: Env, op: crate::types::Operation) -> u64 {
@@ -404,8 +432,35 @@ impl VeroContract {
             if existing_hash != new_wasm_hash {
                 return Err(ContractError::InvalidUpgradeConfig);
             }
-            // Hash matches — just add approval (same as approve_upgrade)
-            return Self::approve_upgrade(env, signer);
+            // Hash matches — just add approval (same as approve_upgrade but without require_auth)
+            let mut approvals: Vec<Address> = env
+                .storage()
+                .instance()
+                .get(&DataKey::PendingUpgradeApprovals)
+                .unwrap_or(Vec::new(&env));
+
+            if approvals.contains(signer.clone()) {
+                return Err(ContractError::AlreadyApproved);
+            }
+            if let Some(previous) = approvals.last() {
+                if previous >= signer {
+                    return Err(ContractError::InvalidUpgradeConfig);
+                }
+            }
+
+            approvals.push_back(signer.clone());
+            env.storage()
+                .instance()
+                .set(&DataKey::PendingUpgradeApprovals, &approvals);
+
+            let threshold: u32 = env
+                .storage()
+                .instance()
+                .get(&DataKey::UpgradeThreshold)
+                .unwrap_or(0u32);
+
+            events::emit_upgrade_approved(&env, &signer, approvals.len(), threshold);
+            return Ok(());
         }
 
         // No pending upgrade — create one
@@ -641,10 +696,14 @@ impl VeroContract {
                 BatchCall::Unpause(admin) => Self::unpause(env.clone(), admin)?,
                 BatchCall::RecordFailure(_admin) => Self::record_failure(env.clone()),
                 BatchCall::ResetCircuitBreaker(admin) => {
-                    Self::reset_circuit_breaker(env.clone(), admin)
+                    Self::reset_circuit_breaker(env.clone(), admin)?;
                 }
                 BatchCall::EmergencyRecover(admin, recipient, amount) => {
                     Self::emergency_recover(env.clone(), admin, recipient, amount)?
+                }
+                BatchCall::SetFeeBps(admin, bps) => Self::set_fee_bps(env.clone(), admin, bps)?,
+                BatchCall::SetTreasuryAddress(admin, treasury) => {
+                    Self::set_treasury_address(env.clone(), admin, treasury)?
                 }
             }
         }
