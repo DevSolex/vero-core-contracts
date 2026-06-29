@@ -1,10 +1,11 @@
 #![allow(missing_docs)]
 
 use crate::contracts::logic;
+use crate::contracts::validate_address;
 use crate::types::{BatchCall, ContractError, DataKey, RewardStream, Snapshot};
 use crate::DEFAULT_WEIGHT_THRESHOLD;
 use crate::{circuit_breaker, drips, events, guardian, reputation, storage, task};
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, panic_with_error, Address, BytesN, Env, Vec};
 
 /// The main entrypoint for the Vero Core contract.
 ///
@@ -40,6 +41,9 @@ impl VeroContract {
         token: Address,
         lock_threshold: i128,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &token)?;
+
         if env
             .storage()
             .instance()
@@ -70,6 +74,7 @@ impl VeroContract {
     }
 
     pub fn toggle_pause(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         let current = env
             .storage()
@@ -83,6 +88,7 @@ impl VeroContract {
     }
 
     pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         env.storage().instance().set(&DataKey::Paused, &true);
         events::emit_pause_toggled(&env, true);
@@ -90,6 +96,7 @@ impl VeroContract {
     }
 
     pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         env.storage().instance().set(&DataKey::Paused, &false);
         events::emit_pause_toggled(&env, false);
@@ -104,6 +111,8 @@ impl VeroContract {
     }
 
     pub fn add_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &guardian)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::GuardianManager)?;
         guardian::add_guardian(&env, admin.clone(), guardian.clone())?;
@@ -116,6 +125,8 @@ impl VeroContract {
         admin: Address,
         guardian: Address,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &guardian)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::GuardianManager)?;
         guardian::remove_guardian(&env, admin.clone(), guardian.clone())?;
@@ -133,6 +144,8 @@ impl VeroContract {
         guardian: Address,
         score: u64,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &guardian)?;
         circuit_breaker::require_not_paused(&env)?;
         reputation::set_reputation(&env, admin.clone(), guardian.clone(), score)?;
         events::emit_reputation_set(&env, &admin, &guardian, score);
@@ -148,14 +161,17 @@ impl VeroContract {
     }
 
     pub fn lock_tokens(env: Env, guardian: Address, amount: i128) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::lock_tokens(&env, guardian, amount)
     }
 
     pub fn request_unlock(env: Env, guardian: Address) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::request_unlock(&env, guardian)
     }
 
     pub fn unlock_tokens(env: Env, guardian: Address) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::unlock_tokens(&env, guardian)
     }
 
@@ -165,11 +181,14 @@ impl VeroContract {
         recipient: Address,
         amount: i128,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &recipient)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         logic::emergency_recover(&env, admin, recipient, amount)
     }
 
     pub fn resign_guardian(env: Env, guardian: Address) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::resign_guardian(&env, guardian)
     }
 
@@ -178,6 +197,7 @@ impl VeroContract {
         admin: Address,
         threshold: u64,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)?;
         env.storage()
@@ -195,6 +215,12 @@ impl VeroContract {
     }
 
     pub fn set_vault_address(env: Env, admin: Address, vault: Address) {
+        if validate_address(&env, &admin).is_err() {
+            panic_with_error!(env, ContractError::InvalidAddress);
+        }
+        if validate_address(&env, &vault).is_err() {
+            panic_with_error!(env, ContractError::InvalidAddress);
+        }
         circuit_breaker::require_not_paused(&env).unwrap();
         // Use try-catch pattern via unwrap since this function has no Result return
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)
@@ -204,6 +230,7 @@ impl VeroContract {
     }
 
     pub fn set_fee_bps(env: Env, admin: Address, bps: u32) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)?;
         if bps > 1000 {
@@ -218,6 +245,8 @@ impl VeroContract {
         admin: Address,
         treasury: Address,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &treasury)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::ConfigManager)?;
         env.storage()
@@ -232,6 +261,7 @@ impl VeroContract {
         task_id: u64,
         min_votes_required: u32,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TaskManager)?;
         let task_ids = soroban_sdk::vec![&env, task_id];
@@ -239,6 +269,7 @@ impl VeroContract {
     }
 
     pub fn cancel_task(env: Env, admin: Address, task_id: u64) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TaskManager)?;
         task::cancel_task(&env, admin, task_id)
@@ -253,12 +284,14 @@ impl VeroContract {
     /// Reverts with `TaskNotFound` if no task exists, `TaskNotTerminal` if the
     /// task is still active, and `NotAuthorized` if the caller is not the admin.
     pub fn purge_task(env: Env, admin: Address, task_id: u64) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TaskManager)?;
         task::purge_task(&env, admin, task_id)
     }
 
     pub fn vote(env: Env, guardian: Address, task_id: u64) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::process_vote(&env, guardian, task_id)
     }
 
@@ -267,6 +300,7 @@ impl VeroContract {
         guardian: Address,
         task_ids: Vec<u64>,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &guardian)?;
         logic::process_vote_batch(&env, guardian, task_ids)
     }
 
@@ -292,6 +326,9 @@ impl VeroContract {
         contributor: Address,
         task_id: u64,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        validate_address(&env, &drips_address)?;
+        validate_address(&env, &contributor)?;
         circuit_breaker::require_not_paused(&env)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TreasuryManager)?;
 
@@ -314,6 +351,7 @@ impl VeroContract {
     }
 
     pub fn reset_circuit_breaker(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::EmergencyManager)?;
         circuit_breaker::reset(&env, admin.clone())?;
         events::emit_circuit_breaker_reset(&env, &admin);
@@ -325,6 +363,9 @@ impl VeroContract {
     }
 
     pub fn upgrade_contract(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+        if validate_address(&env, &admin).is_err() {
+            panic_with_error!(env, ContractError::InvalidAddress);
+        }
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::Admin).unwrap();
         env.deployer()
             .update_current_contract_wasm(new_wasm_hash.clone());
@@ -351,6 +392,10 @@ impl VeroContract {
         signers: Vec<Address>,
         threshold: u32,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        for signer in signers.iter() {
+            validate_address(&env, &signer)?;
+        }
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::Admin)?;
 
         if threshold == 0 || threshold > signers.len() || !is_strictly_sorted_addresses(&signers) {
@@ -410,6 +455,7 @@ impl VeroContract {
         signer: Address,
         new_wasm_hash: BytesN<32>,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &signer)?;
         signer.require_auth();
 
         // Verify signer is authorized
@@ -497,6 +543,7 @@ impl VeroContract {
     /// * `NoPendingUpgrade` — No upgrade has been proposed.
     /// * `AlreadyApproved` — Caller has already approved this proposal.
     pub fn approve_upgrade(env: Env, signer: Address) -> Result<(), ContractError> {
+        validate_address(&env, &signer)?;
         signer.require_auth();
 
         // Verify signer is authorized
@@ -597,6 +644,7 @@ impl VeroContract {
     /// * `NotAuthorized` — Caller is not the contract admin.
     /// * `NoPendingUpgrade` — No upgrade has been proposed.
     pub fn cancel_upgrade(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::Admin)?;
 
         if !env.storage().instance().has(&DataKey::PendingUpgradeWasm) {
@@ -722,6 +770,8 @@ impl VeroContract {
         target: Address,
         role: crate::types::Role,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &caller)?;
+        validate_address(&env, &target)?;
         crate::contracts::rbac::grant_role_internal(&env, &caller, &target, role)
     }
 
@@ -736,6 +786,8 @@ impl VeroContract {
         target: Address,
         role: crate::types::Role,
     ) -> Result<(), ContractError> {
+        validate_address(&env, &caller)?;
+        validate_address(&env, &target)?;
         crate::contracts::rbac::revoke_role_internal(&env, &caller, &target, role)
     }
 

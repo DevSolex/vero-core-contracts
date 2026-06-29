@@ -12,6 +12,7 @@ pub const MAX_REPUTATION_SCORE: u64 = 1_000_000_000;
 pub const MAX_WEIGHT_THRESHOLD: u64 = 1_000_000_000_000;
 
 pub fn validate_external_address(env: &Env, address: &Address) -> Result<(), ContractError> {
+    crate::utils::address::validate_address(env, address)?;
     if address == &env.current_contract_address() {
         return Err(ContractError::InvalidAddress);
     }

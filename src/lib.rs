@@ -27,6 +27,7 @@ mod storage;
 mod task;
 mod timelock;
 mod types;
+mod utils;
 mod validation;
 mod vault;
 
