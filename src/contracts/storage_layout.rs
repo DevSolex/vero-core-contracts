@@ -8,7 +8,8 @@ use crate::types::Role;
 /// This is the single source of truth for `DataKey` — `crate::types` re-exports
 /// it via `pub use crate::contracts::storage_layout::DataKey`.
 #[contracttype]
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
+#[allow(missing_docs)]
 pub enum DataKey {
     Guardian(Address),
     Reputation(Address),

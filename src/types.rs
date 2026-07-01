@@ -231,4 +231,6 @@ pub enum ContractError {
     LastAdminRemovalBlocked = 35,
     /// Attempted to add a guardian that is already registered.
     DuplicateGuardian = 36,
+    /// Storage version mismatch during pre-flight checks.
+    InvalidVersion = 37,
 }
