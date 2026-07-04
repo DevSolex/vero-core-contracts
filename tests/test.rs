@@ -1143,7 +1143,7 @@ fn legacy_gas_cost_estimates_still_pass() {
 fn test_storage_version_is_set_on_initialize() {
     let (_env, _contract_id, _admin, _token, client) = setup();
     // setup() calls initialize(), so the version should already be set.
-    let version = 1; // client.get_storage_version();
+    let version = client.get_storage_version();
     assert_eq!(version, 1, "storage version should be 1 after initialize");
 }
 
@@ -1155,7 +1155,7 @@ fn test_storage_version_defaults_to_zero() {
     let client = VeroContractClient::new(&env, &contract_id);
 
     // Without initialize(), the version should be 0.
-    let version = 1; // client.get_storage_version();
+    let version = client.get_storage_version();
     assert_eq!(version, 0, "uninitialized contract should report version 0");
 }
 
@@ -1168,7 +1168,7 @@ fn test_migrate_storage_idempotent() {
     assert_eq!(v1, 1);
 
     // migrate_storage should be a no-op when already current.
-    let result: Result<(), vero_core_contracts::ContractError> = Ok(()); // client.try_migrate_storage(...)
+    let result = client.try_migrate_storage(&admin);
     assert!(
         result.is_ok(),
         "migrate when current should succeed (no-op)"
@@ -1191,11 +1191,44 @@ fn test_migrate_storage_requires_admin_auth() {
     client.initialize(&admin, &token, &0i128);
 
     let stranger = Address::generate(&env);
-    let result: Result<(), vero_core_contracts::ContractError> = Ok(()); // client.try_migrate_storage(...)
+    let result = client.try_migrate_storage(&stranger);
     assert!(
         result.is_err(),
         "non-admin should not be allowed to migrate"
     );
+}
+
+#[test]
+fn test_simulated_migration_failure_rolls_back() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(admin.clone())
+        .address();
+    let contract_id = env.register_contract(None, vero_core_contracts::VeroContract);
+    let client = VeroContractClient::new(&env, &contract_id);
+    client.initialize(&admin, &token, &100i128);
+
+    // Assert version is 1 initially
+    assert_eq!(client.get_storage_version(), 1);
+
+    // Simulate pre-versioning state and invalid state to fail pre-flight validation
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::StorageVersion, &0u32);
+        env.storage().instance().set(&DataKey::FeeBps, &10001u32); // invalid fee_bps > 10000
+    });
+
+    // Version is now 0
+    assert_eq!(client.get_storage_version(), 0);
+
+    // Running migration fails due to pre-flight check failure
+    let result = client.try_migrate_storage(&admin);
+    assert!(result.is_err(), "expected migration to fail due to pre-flight check");
+
+    // The version remains 0 (rollback succeeded, state was not committed)
+    assert_eq!(client.get_storage_version(), 0);
 }
 
 #[contract]

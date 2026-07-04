@@ -56,7 +56,7 @@ pub fn remove_guardian(env: &Env, admin: Address, guardian: Address) -> Result<(
 
     let mut updated = Vec::new(env);
     for g in all_guardians.iter() {
-        if g != &guardian {
+        if g != guardian {
             updated.push_back(g.clone());
         }
     }

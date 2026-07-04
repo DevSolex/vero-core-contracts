@@ -64,6 +64,8 @@ impl VeroContract {
         let admin_role_key = DataKey::RoleAssignment(admin.clone(), crate::types::Role::Admin);
         env.storage().instance().set(&admin_role_key, &true);
 
+        crate::migrate::set_version(&env, crate::migrate::CURRENT_VERSION);
+
         env.storage().instance().extend_ttl(100_000, 100_000);
         events::emit_contract_initialized(&env, &admin);
         Ok(())
@@ -794,5 +796,18 @@ impl VeroContract {
     /// Check whether an address holds a specific role.
     pub fn has_role(env: Env, address: Address, role: crate::types::Role) -> bool {
         crate::contracts::rbac::has_role(&env, &address, role)
+    }
+
+    /// Returns the currently recorded storage version.
+    pub fn get_storage_version(env: Env) -> u32 {
+        crate::migrate::get_version(&env)
+    }
+
+    /// Run the storage migration to bring the storage schema to the latest version.
+    /// Only contract admin can trigger migration.
+    pub fn migrate_storage(env: Env, admin: Address) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::Admin)?;
+        crate::migrate::migrate(&env)
     }
 }
