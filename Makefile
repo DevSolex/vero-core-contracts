@@ -18,7 +18,7 @@ test:
 	cargo test
 
 check:
-	cargo check --features verification
+	cargo check
 
 # Kani proof harnesses (requires cargo-kani installed)
 verify:
@@ -26,7 +26,7 @@ verify:
 
 # Runtime invariant tests (pure consensus logic, no Soroban host)
 invariants:
-	cargo test --test safety_invariants --features verification
+	cargo test --test safety_invariants
 
 # K-framework proofs (requires K Framework 6.0+)
 proofs:
