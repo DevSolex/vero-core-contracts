@@ -11,10 +11,10 @@ edition = "2021"
 #   cargo kani --manifest-path verification/Cargo.toml
 
 [dependencies]
-# Pull in the pure consensus logic from the main crate.
-# The `verification` feature exposes `pub mod consensus` without
-# requiring the Soroban host environment.
-vero-core-contracts = { path = "..", features = ["verification"] }
+# Pull in the pure consensus logic from the main crate. `consensus` is a
+# plain public module with no Soroban `Env` dependency, so no feature
+# gate is needed to opt out of the host environment.
+vero-core-contracts = { path = ".." }
 
 # NOTE: `kani` is NOT listed as a dependency here.
 # Kani injects its own stubs at verification time via `cargo kani`.
