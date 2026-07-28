@@ -68,6 +68,26 @@ pub fn register_tasks(
         };
         storage::set_active_task(env, &task);
         all_tasks.push_back(task_id);
+
+        // Maintain a dense slot index alongside `AllTasks` so paginated reads
+        // (`get_tasks_page`) can fetch a bounded page of slots instead of the
+        // whole task set. See `purge_task` for the matching swap-remove
+        // compaction.
+        let slot: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TaskIndexCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexAt(slot), &task_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexOf(task_id), &slot);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexCount, &(slot + 1));
+
         events::emit_task_registered(env, &admin, task_id);
     }
 
@@ -118,6 +138,8 @@ pub fn get_all_tasks(env: &Env) -> Vec<u64> {
 /// - The task_id entry in the `AllTasks` index
 /// - `RewardStream(task_id)` — the task's reward stream record, if one exists
 /// - The task_id entry in the `AllRewardStreams` index
+/// - The task_id entry in the `TaskIndexAt`/`TaskIndexOf` slot index (used by
+///   `get_tasks_page` for bounded-cost pagination)
 ///
 /// Reward stream records are not retained after their task is purged: a
 /// stream is scoped to the lifetime of the task it rewards, so
@@ -192,6 +214,45 @@ pub fn purge_task(env: &Env, _admin: Address, task_id: u64) -> Result<(), Contra
     env.storage()
         .instance()
         .set(&DataKey::AllRewardStreams, &updated_streams);
+
+    // 5. Swap-remove `task_id` from the dense slot index: move the last
+    // slot's occupant into the freed slot, then shrink the count by one.
+    if let Some(slot) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::TaskIndexOf(task_id))
+    {
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TaskIndexCount)
+            .unwrap_or(0);
+        if count > 0 {
+            let last_slot = count - 1;
+            if slot != last_slot {
+                let last_id: u64 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::TaskIndexAt(last_slot))
+                    .unwrap();
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TaskIndexAt(slot), &last_id);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::TaskIndexOf(last_id), &slot);
+            }
+            env.storage()
+                .instance()
+                .remove(&DataKey::TaskIndexAt(last_slot));
+            env.storage()
+                .instance()
+                .remove(&DataKey::TaskIndexOf(task_id));
+            env.storage()
+                .instance()
+                .set(&DataKey::TaskIndexCount, &last_slot);
+        }
+    }
 
     events::emit_task_purged(env, task_id);
 
