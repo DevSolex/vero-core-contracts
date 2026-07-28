@@ -16,7 +16,7 @@ fn try_release_vault_funds(env: &Env, task_id: u64, vault_addr: &Address) {
     // This will not panic on failure - it returns a Result
     let vault_client = vault::VaultClient::new(env, vault_addr);
     let result = vault_client.try_release_funds(&task_id);
-    
+
     match result {
         Ok(_) => {
             events::emit_vault_release_success(env, task_id);

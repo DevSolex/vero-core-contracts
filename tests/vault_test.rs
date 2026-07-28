@@ -1,7 +1,4 @@
-use soroban_sdk::{
-    testutils::{Address as _},
-    Address, Env,
-};
+use soroban_sdk::{testutils::Address as _, Address, Env};
 use vero_core_contracts::VeroContractClient;
 
 const LOCK_THRESHOLD: i128 = 100;
@@ -41,7 +38,7 @@ fn test_task_resolves_when_vault_fails() {
 
     // Get the contract ID for the vault
     let contract_id = env.register_contract(None, vero_core_contracts::VeroContract);
-    
+
     // Set the vault to the contract itself (which doesn't implement release_funds properly)
     // This will cause the vault call to fail
     client.set_vault_address(&admin, &contract_id);
@@ -61,7 +58,10 @@ fn test_task_resolves_when_vault_fails() {
 
     // Verify the task is done even though the vault call failed
     let task = client.get_task(&1u64).unwrap();
-    assert!(task.is_done, "Task should be resolved even when vault call fails");
+    assert!(
+        task.is_done,
+        "Task should be resolved even when vault call fails"
+    );
     assert_eq!(task.votes, 1);
     assert_eq!(task.total_weight_accrued, 500);
 }
