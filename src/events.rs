@@ -233,3 +233,15 @@ mod tests {
         assert_eq!(weight, big_weight);
     }
 }
+/// Emits an event when vault funds are successfully released.
+pub fn emit_vault_release_success(env: &Env, task_id: u64) {
+    env.events()
+        .publish((symbol_short!("vault_ok"),), task_id);
+}
+
+/// Emits an event when vault release fails (but does not revert the transaction).
+pub fn emit_vault_release_failed(env: &Env, task_id: u64) {
+    env.events()
+        .publish((symbol_short!("vault_err"),), task_id);
+}
+
