@@ -116,6 +116,13 @@ pub fn get_all_tasks(env: &Env) -> Vec<u64> {
 /// - `TaskVoters(task_id)` — the per-task voter list
 /// - `Voted(task_id, voter)` — each individual vote record
 /// - The task_id entry in the `AllTasks` index
+/// - `RewardStream(task_id)` — the task's reward stream record, if one exists
+/// - The task_id entry in the `AllRewardStreams` index
+///
+/// Reward stream records are not retained after their task is purged: a
+/// stream is scoped to the lifetime of the task it rewards, so
+/// `get_reward_stream`/`get_all_reward_streams`/`get_snapshot` never
+/// reference a task_id that no longer exists in `AllTasks`.
 ///
 /// Reverts with `TaskNotFound` when no active or archived task exists for the
 /// given id. Reverts with `TaskNotTerminal` when the task is still active
@@ -165,6 +172,26 @@ pub fn purge_task(env: &Env, _admin: Address, task_id: u64) -> Result<(), Contra
         }
     }
     env.storage().instance().set(&DataKey::AllTasks, &updated);
+
+    // 4. Remove the reward stream record (if any) and its index entry.
+    env.storage()
+        .instance()
+        .remove(&DataKey::RewardStream(task_id));
+
+    let all_streams: Vec<u64> = env
+        .storage()
+        .instance()
+        .get(&DataKey::AllRewardStreams)
+        .unwrap_or(Vec::new(env));
+    let mut updated_streams = Vec::new(env);
+    for id in all_streams.iter() {
+        if id != task_id {
+            updated_streams.push_back(id);
+        }
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::AllRewardStreams, &updated_streams);
 
     events::emit_task_purged(env, task_id);
 
