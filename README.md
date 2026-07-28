@@ -1,3 +1,175 @@
+# Vero Core Contracts
+
+On-chain GitHub PR verification for the Stellar ecosystem. Guardians — trusted off-chain validators — cast weighted votes on registered tasks (pull requests). Once cumulative reputation weight meets a configurable threshold the task is marked done, creating a tamper-proof audit trail on Soroban.
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         VeroContract                             │
+│                                                                  │
+│  initialize(token, threshold)                                    │
+│  add_guardian(admin, guardian)                                   │
+│  register_task(admin, task_id)                                   │
+│  vote(guardian, task_id) ──► weight check ──► threshold check   │
+│  get_task(task_id) ──► Task { id, votes, is_done, weight }       │
+│                                                                  │
+│  pause(admin) / unpause(admin) / toggle_pause(admin)            │
+│  record_failure() ──► circuit breaker (auto-pause at >50)       │
+│  reset_circuit_breaker(admin)                                    │
+└──────────────────────────────────────┬───────────────────────────┘
+                                       │ instance storage
+                         ┌─────────────┴──────────────┐
+                         │          DataKey            │
+                         │  Guardian(Address)          │
+                         │  Reputation(Address)        │
+                         │  Task(u64)                  │
+                         │  Voted(u64, Address)        │
+                         │  Paused                     │
+                         │  FailureCount               │
+                         └─────────────────────────────┘
+```
+
+**Flow**
+
+1. Admin calls `initialize` with a token address and lock threshold.
+2. Admin registers a GitHub PR as a `Task` with a unique numeric ID.
+3. Admin whitelists trusted validator addresses as guardians and assigns reputation scores.
+4. Guardians lock tokens above the threshold, then call `vote`.
+5. Each vote adds the guardian's reputation weight to `total_weight_accrued`.
+6. When `total_weight_accrued >= weight_threshold` (default 300) the task's `is_done` flips to `true`.
+
+---
+
+## Modules
+
+| Module | Responsibility |
+|---|---|
+| `types` | `Task`, `DataKey`, `ContractError`, `RewardStream` |
+| `guardian` | Guardian registry with TTL-extended instance storage |
+| `task` | Task registration and retrieval |
+| `reputation` | Guardian reputation scores and voting power calculation |
+| `circuit_breaker` | Emergency halt: `require_not_paused`, `record_failure`, `reset` |
+| `reentrancy` | Mutex lock/unlock guarding `vote` and `register_task` |
+| `drips` | Cross-contract reward stream initiation via Drips protocol |
+| `vault` | Cross-contract escrow release on task resolution |
+| `events` | On-chain event emission |
+| `lib` | Public contract surface and `vote` orchestration |
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install --locked soroban-cli
+```
+
+### Build
+
+```bash
+cargo build --target wasm32-unknown-unknown --release
+```
+
+### Test
+
+```bash
+cargo test
+```
+
+---
+
+## Code Snippets
+
+### Initialize the contract
+
+```rust
+client.initialize(&token_address, &100i128); // lock threshold = 100
+```
+
+### Add a guardian and set reputation
+
+```rust
+client.add_guardian(&admin, &validator_address);
+client.set_reputation(&admin, &validator_address, &300u64); // score = 300
+```
+
+### Lock tokens (guardian must do this before voting)
+
+```rust
+client.lock_tokens(&guardian, &150i128); // amount > threshold
+```
+
+### Register a task
+
+```rust
+client.register_task(&admin, &pr_number);
+```
+
+### Cast a vote
+
+```rust
+client.vote(&guardian, &pr_number)?;
+```
+
+### Query task state
+
+```rust
+let task = client.get_task(&pr_number).unwrap();
+assert!(task.is_done); // true once weight threshold is reached
+```
+
+---
+
+## Storage Design
+
+All state lives in **instance storage** — scoped to the contract instance and extended with a 100 000-ledger TTL window on every guardian write. Keys are typed via the `DataKey` enum so there are no raw string collisions.
+
+```rust
+pub enum DataKey {
+    Guardian(Address),             // bool — is this address a guardian?
+    Reputation(Address),           // u64 — reputation score
+    WeightThreshold,               // u64 — cumulative weight required to resolve
+    Task(u64),                     // Task — the live (active) task entry
+    Voted(u64, Address),           // bool — has this guardian voted on this task?
+    TaskVoters(u64),               // Vec<Address> — guardians who voted on this task
+    Admin,                         // Address — the multi-sig admin account
+    RoleAssignment(Address, Role), // bool — does this address hold this RBAC role?
+    DripsAddress,                  // Address — the Drips protocol contract
+    VaultAddress,                  // Address — escrow vault contract
+    RewardStream(u64),             // RewardStream — active drip stream for a task
+    TokenAddress,                  // Address — locked token contract
+    LockThreshold,                 // i128 — minimum locked balance to vote
+    LockedBalance(Address),        // i128 — tokens locked by a guardian
+    Lock,                          // re-entrancy mutex
+    FailureCount,                  // u32 — circuit breaker failure counter
+    Paused,                        // bool — emergency halt flag
+    AllGuardians,                  // Vec<Address> — index of every registered guardian
+    AllTasks,                      // Vec<u64> — index of every task id tracked by the contract
+    AllVotes,                      // reserved — superseded by the TaskVoters(u64) index, not currently written
+    AllRewardStreams,              // Vec<u64> — index of task ids with an active reward stream
+    Snapshot(u64),                 // Snapshot — recorded contract state at a given timestamp
+    AllSnapshots,                  // Vec<u64> — index of recorded snapshot timestamps
+    ActiveTask(u64),               // reserved — active tasks are stored under Task(u64), not currently written
+    ArchivedTask(u64),             // Task — archived copy of a resolved, stale task
+    Initialized,                   // bool — has the contract's constructor already run?
+    WithdrawalTimelock(Address),   // u64 — timestamp a guardian's token unlock was requested
+    UpgradeSigners,                // Vec<Address> — addresses authorized to approve contract upgrades
+    UpgradeThreshold,              // u32 — number of signer approvals required to execute an upgrade
+    PendingUpgradeWasm,            // BytesN<32> — hash of the WASM proposed for the pending upgrade
+    PendingUpgradeApprovals,       // Vec<Address> — signers who have approved the pending upgrade
+    StorageVersion,                // u32 — schema version of on-chain storage, used by migrations
+    FeeBps,                        // u32 — protocol fee in basis points
+    TreasuryAddress,               // Address — destination for collected protocol fees
+}
+```
+
+---
+
 ## Error Codes
 
 | Code | Variant | Meaning |
