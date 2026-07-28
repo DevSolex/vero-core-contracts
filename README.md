@@ -1,154 +1,3 @@
-# Vero Core Contracts
-
-On-chain GitHub PR verification for the Stellar ecosystem. Guardians — trusted off-chain validators — cast weighted votes on registered tasks (pull requests). Once cumulative reputation weight meets a configurable threshold the task is marked done, creating a tamper-proof audit trail on Soroban.
-
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                         VeroContract                             │
-│                                                                  │
-│  initialize(token, threshold)                                    │
-│  add_guardian(admin, guardian)                                   │
-│  register_task(admin, task_id)                                   │
-│  vote(guardian, task_id) ──► weight check ──► threshold check   │
-│  get_task(task_id) ──► Task { id, votes, is_done, weight }       │
-│                                                                  │
-│  pause(admin) / unpause(admin) / toggle_pause(admin)            │
-│  record_failure() ──► circuit breaker (auto-pause at >50)       │
-│  reset_circuit_breaker(admin)                                    │
-└──────────────────────────────────────┬───────────────────────────┘
-                                       │ instance storage
-                         ┌─────────────┴──────────────┐
-                         │          DataKey            │
-                         │  Guardian(Address)          │
-                         │  Reputation(Address)        │
-                         │  Task(u64)                  │
-                         │  Voted(u64, Address)        │
-                         │  Paused                     │
-                         │  FailureCount               │
-                         └─────────────────────────────┘
-```
-
-**Flow**
-
-1. Admin calls `initialize` with a token address and lock threshold.
-2. Admin registers a GitHub PR as a `Task` with a unique numeric ID.
-3. Admin whitelists trusted validator addresses as guardians and assigns reputation scores.
-4. Guardians lock tokens above the threshold, then call `vote`.
-5. Each vote adds the guardian's reputation weight to `total_weight_accrued`.
-6. When `total_weight_accrued >= weight_threshold` (default 300) the task's `is_done` flips to `true`.
-
----
-
-## Modules
-
-| Module | Responsibility |
-|---|---|
-| `types` | `Task`, `DataKey`, `ContractError`, `RewardStream` |
-| `guardian` | Guardian registry with TTL-extended instance storage |
-| `task` | Task registration and retrieval |
-| `reputation` | Guardian reputation scores and voting power calculation |
-| `circuit_breaker` | Emergency halt: `require_not_paused`, `record_failure`, `reset` |
-| `reentrancy` | Mutex lock/unlock guarding `vote` and `register_task` |
-| `drips` | Cross-contract reward stream initiation via Drips protocol |
-| `vault` | Cross-contract escrow release on task resolution |
-| `events` | On-chain event emission |
-| `lib` | Public contract surface and `vote` orchestration |
-
----
-
-## Quick Start
-
-### Prerequisites
-
-```bash
-rustup target add wasm32-unknown-unknown
-cargo install --locked soroban-cli
-```
-
-### Build
-
-```bash
-cargo build --target wasm32-unknown-unknown --release
-```
-
-### Test
-
-```bash
-cargo test
-```
-
----
-
-## Code Snippets
-
-### Initialize the contract
-
-```rust
-client.initialize(&token_address, &100i128); // lock threshold = 100
-```
-
-### Add a guardian and set reputation
-
-```rust
-client.add_guardian(&admin, &validator_address);
-client.set_reputation(&admin, &validator_address, &300u64); // score = 300
-```
-
-### Lock tokens (guardian must do this before voting)
-
-```rust
-client.lock_tokens(&guardian, &150i128); // amount > threshold
-```
-
-### Register a task
-
-```rust
-client.register_task(&admin, &pr_number);
-```
-
-### Cast a vote
-
-```rust
-client.vote(&guardian, &pr_number)?;
-```
-
-### Query task state
-
-```rust
-let task = client.get_task(&pr_number).unwrap();
-assert!(task.is_done); // true once weight threshold is reached
-```
-
----
-
-## Storage Design
-
-All state lives in **instance storage** — scoped to the contract instance and extended with a 100 000-ledger TTL window on every guardian write. Keys are typed via the `DataKey` enum so there are no raw string collisions.
-
-```rust
-pub enum DataKey {
-    Guardian(Address),      // bool — is this address a guardian?
-    Reputation(Address),    // u64 — reputation score
-    Task(u64),              // Task struct
-    Voted(u64, Address),    // bool — has this guardian voted on this task?
-    WeightThreshold,        // u64 — cumulative weight required to resolve
-    TokenAddress,           // Address — locked token contract
-    LockThreshold,          // i128 — minimum locked balance to vote
-    LockedBalance(Address), // i128 — tokens locked by a guardian
-    Lock,                   // re-entrancy mutex
-    FailureCount,           // u32 — circuit breaker failure counter
-    Paused,                 // bool — emergency halt flag
-    VaultAddress,           // Address — escrow vault contract
-    RewardStream(u64),      // RewardStream — active drip stream for a task
-}
-```
-
----
-
 ## Error Codes
 
 | Code | Variant | Meaning |
@@ -158,17 +7,39 @@ pub enum DataKey {
 | 3 | `TaskNotVerified` | Task is not yet resolved; cannot start reward stream |
 | 4 | `StreamAlreadyActive` | A reward stream for this task already exists |
 | 5 | `DripsCallFailed` | Cross-contract call to Drips protocol reverted |
-| 6 | `AlreadyInitialized` | Contract has already been initialized |
-| 7 | `NotInitialized` | Contract has not been initialized |
-| 8 | `NoReputationScore` | Guardian has no reputation score assigned |
-| 9 | `ZeroWeightVote` | Guardian's reputation score is zero |
+| 6 | `Locked` | Re-entrancy guard is active |
+| 7 | `AlreadyInitialized` | Contract has already been initialized |
+| 8 | `NotInitialized` | Contract has not been initialized |
+| 9 | `InsufficientLockedBalance` | Guardian's locked balance does not exceed the threshold |
 | 10 | `WeightOverflow` | Adding vote weight would overflow u64 |
-| 11 | `InsufficientLockedBalance` | Guardian's locked balance does not exceed the threshold |
-| 12 | `StillGuardian` | Cannot unlock tokens while still registered as a guardian |
-| 13 | `NotGuardian` | Address is not a registered guardian |
-| 14 | `Locked` | Re-entrancy guard is active |
+| 11 | `StillGuardian` | Cannot unlock tokens while still registered as a guardian |
+| 12 | `NotGuardian` | Address is not a registered guardian |
+| 13 | `ZeroWeightVote` | Guardian's reputation score is zero |
+| 14 | `NoReputationScore` | Guardian has no reputation score assigned |
 | 15 | `ContractPaused` | Contract is paused; all state-changing calls are blocked |
 | 16 | `EscrowUnavailable` | Cross-contract call to vault/escrow reverted |
+| 17 | `TaskCancelled` | Task has been cancelled and cannot be processed |
+| 18 | `InvalidAddress` | Invalid address provided |
+| 19 | `InvalidAmount` | Invalid amount provided |
+| 20 | `InvalidConfig` | Invalid configuration |
+| 21 | `InvalidRange` | Value is outside valid range |
+| 22 | `BatchTooLarge` | Batch operation is too large |
+| 23 | `TaskNotFound` | Task not found |
+| 24 | `TaskAlreadyArchived` | Task has already been archived |
+| 25 | `TaskNotStale` | Task is not stale enough to be pruned |
+| 26 | `SnapshotNotFound` | Snapshot not found |
+| 27 | `WithdrawalTimelockActive` | Withdrawal timelock is still active |
+| 28 | `TaskNotTerminal` | Task is not in terminal state |
+| 29 | `InsufficientReputation` | Insufficient reputation score |
+| 30 | `NotUpgradeSigner` | Caller is not authorized as a multi-sig upgrade signer |
+| 31 | `UpgradeThresholdNotMet` | Not enough upgrade approvals collected yet |
+| 32 | `NoPendingUpgrade` | No pending upgrade proposal to act on |
+| 33 | `AlreadyApproved` | Signer has already approved this upgrade proposal |
+| 34 | `InvalidUpgradeConfig` | Invalid multi-sig upgrade configuration (threshold > signers or zero) |
+| 35 | `LastAdminRemovalBlocked` | Cannot revoke the last remaining Admin role holder (would cause lockout) |
+| 36 | `DuplicateGuardian` | Attempted to add a guardian that is already registered |
+| 37 | `InvalidVersion` | Storage version mismatch during pre-flight checks |
+
 
 ---
 
@@ -233,3 +104,6 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for dev enviro
 ## License
 
 Apache-2.0
+
+
+
