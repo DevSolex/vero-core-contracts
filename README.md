@@ -131,19 +131,40 @@ All state lives in **instance storage** — scoped to the contract instance and 
 
 ```rust
 pub enum DataKey {
-    Guardian(Address),      // bool — is this address a guardian?
-    Reputation(Address),    // u64 — reputation score
-    Task(u64),              // Task struct
-    Voted(u64, Address),    // bool — has this guardian voted on this task?
-    WeightThreshold,        // u64 — cumulative weight required to resolve
-    TokenAddress,           // Address — locked token contract
-    LockThreshold,          // i128 — minimum locked balance to vote
-    LockedBalance(Address), // i128 — tokens locked by a guardian
-    Lock,                   // re-entrancy mutex
-    FailureCount,           // u32 — circuit breaker failure counter
-    Paused,                 // bool — emergency halt flag
-    VaultAddress,           // Address — escrow vault contract
-    RewardStream(u64),      // RewardStream — active drip stream for a task
+    Guardian(Address),             // bool — is this address a guardian?
+    Reputation(Address),           // u64 — reputation score
+    WeightThreshold,               // u64 — cumulative weight required to resolve
+    Task(u64),                     // Task — the live (active) task entry
+    Voted(u64, Address),           // bool — has this guardian voted on this task?
+    TaskVoters(u64),               // Vec<Address> — guardians who voted on this task
+    Admin,                         // Address — the multi-sig admin account
+    RoleAssignment(Address, Role), // bool — does this address hold this RBAC role?
+    DripsAddress,                  // Address — the Drips protocol contract
+    VaultAddress,                  // Address — escrow vault contract
+    RewardStream(u64),             // RewardStream — active drip stream for a task
+    TokenAddress,                  // Address — locked token contract
+    LockThreshold,                 // i128 — minimum locked balance to vote
+    LockedBalance(Address),        // i128 — tokens locked by a guardian
+    Lock,                          // re-entrancy mutex
+    FailureCount,                  // u32 — circuit breaker failure counter
+    Paused,                        // bool — emergency halt flag
+    AllGuardians,                  // Vec<Address> — index of every registered guardian
+    AllTasks,                      // Vec<u64> — index of every task id tracked by the contract
+    AllVotes,                      // reserved — superseded by the TaskVoters(u64) index, not currently written
+    AllRewardStreams,              // Vec<u64> — index of task ids with an active reward stream
+    Snapshot(u64),                 // Snapshot — recorded contract state at a given timestamp
+    AllSnapshots,                  // Vec<u64> — index of recorded snapshot timestamps
+    ActiveTask(u64),               // reserved — active tasks are stored under Task(u64), not currently written
+    ArchivedTask(u64),             // Task — archived copy of a resolved, stale task
+    Initialized,                   // bool — has the contract's constructor already run?
+    WithdrawalTimelock(Address),   // u64 — timestamp a guardian's token unlock was requested
+    UpgradeSigners,                // Vec<Address> — addresses authorized to approve contract upgrades
+    UpgradeThreshold,              // u32 — number of signer approvals required to execute an upgrade
+    PendingUpgradeWasm,            // BytesN<32> — hash of the WASM proposed for the pending upgrade
+    PendingUpgradeApprovals,       // Vec<Address> — signers who have approved the pending upgrade
+    StorageVersion,                // u32 — schema version of on-chain storage, used by migrations
+    FeeBps,                        // u32 — protocol fee in basis points
+    TreasuryAddress,               // Address — destination for collected protocol fees
 }
 ```
 
@@ -158,17 +179,39 @@ pub enum DataKey {
 | 3 | `TaskNotVerified` | Task is not yet resolved; cannot start reward stream |
 | 4 | `StreamAlreadyActive` | A reward stream for this task already exists |
 | 5 | `DripsCallFailed` | Cross-contract call to Drips protocol reverted |
-| 6 | `AlreadyInitialized` | Contract has already been initialized |
-| 7 | `NotInitialized` | Contract has not been initialized |
-| 8 | `NoReputationScore` | Guardian has no reputation score assigned |
-| 9 | `ZeroWeightVote` | Guardian's reputation score is zero |
+| 6 | `Locked` | Re-entrancy guard is active |
+| 7 | `AlreadyInitialized` | Contract has already been initialized |
+| 8 | `NotInitialized` | Contract has not been initialized |
+| 9 | `InsufficientLockedBalance` | Guardian's locked balance does not exceed the threshold |
 | 10 | `WeightOverflow` | Adding vote weight would overflow u64 |
-| 11 | `InsufficientLockedBalance` | Guardian's locked balance does not exceed the threshold |
-| 12 | `StillGuardian` | Cannot unlock tokens while still registered as a guardian |
-| 13 | `NotGuardian` | Address is not a registered guardian |
-| 14 | `Locked` | Re-entrancy guard is active |
+| 11 | `StillGuardian` | Cannot unlock tokens while still registered as a guardian |
+| 12 | `NotGuardian` | Address is not a registered guardian |
+| 13 | `ZeroWeightVote` | Guardian's reputation score is zero |
+| 14 | `NoReputationScore` | Guardian has no reputation score assigned |
 | 15 | `ContractPaused` | Contract is paused; all state-changing calls are blocked |
 | 16 | `EscrowUnavailable` | Cross-contract call to vault/escrow reverted |
+| 17 | `TaskCancelled` | Task has been cancelled and cannot be processed |
+| 18 | `InvalidAddress` | Invalid address provided |
+| 19 | `InvalidAmount` | Invalid amount provided |
+| 20 | `InvalidConfig` | Invalid configuration |
+| 21 | `InvalidRange` | Value is outside valid range |
+| 22 | `BatchTooLarge` | Batch operation is too large |
+| 23 | `TaskNotFound` | Task not found |
+| 24 | `TaskAlreadyArchived` | Task has already been archived |
+| 25 | `TaskNotStale` | Task is not stale enough to be pruned |
+| 26 | `SnapshotNotFound` | Snapshot not found |
+| 27 | `WithdrawalTimelockActive` | Withdrawal timelock is still active |
+| 28 | `TaskNotTerminal` | Task is not in terminal state |
+| 29 | `InsufficientReputation` | Insufficient reputation score |
+| 30 | `NotUpgradeSigner` | Caller is not authorized as a multi-sig upgrade signer |
+| 31 | `UpgradeThresholdNotMet` | Not enough upgrade approvals collected yet |
+| 32 | `NoPendingUpgrade` | No pending upgrade proposal to act on |
+| 33 | `AlreadyApproved` | Signer has already approved this upgrade proposal |
+| 34 | `InvalidUpgradeConfig` | Invalid multi-sig upgrade configuration (threshold > signers or zero) |
+| 35 | `LastAdminRemovalBlocked` | Cannot revoke the last remaining Admin role holder (would cause lockout) |
+| 36 | `DuplicateGuardian` | Attempted to add a guardian that is already registered |
+| 37 | `InvalidVersion` | Storage version mismatch during pre-flight checks |
+
 
 ---
 
@@ -233,3 +276,6 @@ Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for dev enviro
 ## License
 
 Apache-2.0
+
+
+
