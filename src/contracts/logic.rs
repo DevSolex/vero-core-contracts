@@ -11,7 +11,7 @@ use soroban_sdk::{Address, Env, Map, Vec};
 /// Attempts to release funds from the vault. If the vault call fails, the failure
 /// is logged via an event but does not revert the transaction. This ensures task
 /// resolution is not blocked by a broken vault.
-fn try_release_vault_funds(env: &Env, task_id: u64, vault_addr: &Address) {
+pub(crate) fn try_release_vault_funds(env: &Env, task_id: u64, vault_addr: &Address) {
     // Use the generated try_release_funds method from VaultClient
     // This will not panic on failure - it returns a Result
     let vault_client = vault::VaultClient::new(env, vault_addr);
