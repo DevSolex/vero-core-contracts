@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A
 
 ### Fixed
-- N/A
+- `resolved`/`wt_vote` events no longer truncate `task_id`/`weight` to 32 bits; both are now emitted as full `u64` values (#159)
 
 ### Security
 - N/A
