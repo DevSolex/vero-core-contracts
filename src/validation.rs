@@ -54,8 +54,8 @@ pub fn validate_reward_stream_config(
 
 /// Validates that a given `task_id` falls within the allowed range (`1..=MAX_TASK_ID`).
 ///
-/// Note: `task_id == 0` is intentionally rejected because `0` serves as a reserved 
-/// sentinel value across the protocol to indicate an uninitialized, unset, or 
+/// Note: `task_id == 0` is intentionally rejected because `0` serves as a reserved
+/// sentinel value across the protocol to indicate an uninitialized, unset, or
 /// invalid task identifier.
 pub fn validate_task_id(task_id: u64) -> Result<(), ContractError> {
     if task_id == 0 || task_id > MAX_TASK_ID {
@@ -124,6 +124,9 @@ mod tests {
 
     #[test]
     fn test_validate_task_id_exceeds_max_rejected() {
-        assert_eq!(validate_task_id(MAX_TASK_ID + 1), Err(ContractError::InvalidConfig));
+        assert_eq!(
+            validate_task_id(MAX_TASK_ID + 1),
+            Err(ContractError::InvalidConfig)
+        );
     }
 }
