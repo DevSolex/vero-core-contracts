@@ -68,6 +68,26 @@ pub fn register_tasks(
         };
         storage::set_active_task(env, &task);
         all_tasks.push_back(task_id);
+
+        // Maintain a dense slot index alongside `AllTasks` so paginated reads
+        // (`get_tasks_page`) can fetch a bounded page of slots instead of the
+        // whole task set. See `purge_task` for the matching swap-remove
+        // compaction.
+        let slot: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TaskIndexCount)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexAt(slot), &task_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexOf(task_id), &slot);
+        env.storage()
+            .instance()
+            .set(&DataKey::TaskIndexCount, &(slot + 1));
+
         events::emit_task_registered(env, &admin, task_id);
     }
 
