@@ -318,8 +318,18 @@ impl VeroContract {
         task::get_task(&env, task_id)
     }
 
-    pub fn archive_task(env: Env, task_id: u64) -> Result<(), ContractError> {
+    /// Archives a resolved, stale task, moving it from active to archived storage.
+    ///
+    /// Requires the `TaskManager` role. This was previously permissionless;
+    /// however, `start_drips_stream` only resolves tasks from active storage
+    /// (no archived-storage fallback), so an unauthorized early archive could
+    /// permanently block a task's reward stream from ever starting. Gating
+    /// this behind `TaskManager`, consistent with `cancel_task`/`purge_task`,
+    /// prevents that griefing vector.
+    pub fn archive_task(env: Env, admin: Address, task_id: u64) -> Result<(), ContractError> {
+        validate_address(&env, &admin)?;
         circuit_breaker::require_not_paused(&env)?;
+        crate::contracts::rbac::require_role(&env, &admin, crate::types::Role::TaskManager)?;
         storage::archive_task(&env, task_id)?;
         events::emit_task_archived(&env, task_id);
         Ok(())
