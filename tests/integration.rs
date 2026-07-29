@@ -1,9 +1,7 @@
 #![cfg(test)]
 
 use soroban_sdk::token::StellarAssetClient as TestTokenClient;
-use soroban_sdk::{
-    contract, contractimpl, testutils::Address as _, Address, Env,
-};
+use soroban_sdk::{contract, contractimpl, testutils::Address as _, Address, Env};
 use vero_core_contracts::{Role, VeroContract, VeroContractClient};
 
 #[contract]
